@@ -1,45 +1,37 @@
 import datetime
 
-import psycopg2
 from task import Task
+from sqlalchemy.orm import DeclarativeBase, Session
+from sqlalchemy import create_engine, Column, Integer, String, ForeignKey, Boolean, TIMESTAMP
 
-conn = psycopg2.connect(dbname="python_db", host="localhost", user="postgres", password="memuna19641970", port=5432)
+engine = create_engine("postgresql://postgres:memuna19641970@localhost:5432/python_db")
 
-conn.autocommit = True
-cursor = conn.cursor()
+class Base(DeclarativeBase):
+    pass
 
+class User(Base):
+    __tablename__ = 'users'
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    full_name = Column(String)
+    username = Column(String, unique=True, nullable=False)
+    password = Column(String, nullable=False)
+    created_at = Column(TIMESTAMP, default=datetime.datetime.now())
 
-def migrate_tables():
-    try:
-        cursor.execute("""
-                    CREATE TABLE IF NOT EXISTS users
-            (
-                id         SERIAL PRIMARY KEY,
-                full_name  VARCHAR,
-                username   VARCHAR UNIQUE NOT NULL,
-                password   VARCHAR        NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );""")
-        cursor.execute("""
-                    CREATE TABLE IF NOT EXISTS tasks
-                    (
-                        id          SERIAL PRIMARY KEY,
-                        user_id     INT NOT NULL,
-                        title       VARCHAR,
-                        description TEXT,
-                        deadline    TIMESTAMP,
-                        priority    VARCHAR,
-                        is_done     BOOLEAN DEFAULT false,
-                        deleted_at  TIMESTAMP,
-                        FOREIGN KEY (user_id) REFERENCES users (id)
-                    );""")
-    except Exception as e:
-        print(f"Ошибка во время миграции: {e}")
+class Task(Base):
+    __tablename__ = 'tasks'
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey('users.id'))
+    title = Column(String)
+    description = Column(String)
+    deadline = Column(TIMESTAMP)
+    priority = Column(String)
+    is_done = Column(Boolean, default=False)
+    deleted_at = Column(TIMESTAMP)
 
-
-def close_db_conn():
-    cursor.close()
-    conn.close()
+try:
+    Base.metadata.create_all(bind=engine)
+except Exception as e:
+    print("Ошибка во время миграции")
 
 
 # C - create
@@ -50,67 +42,36 @@ def create_task(task):
         print("Ошибка: неверный формат даты!")
 
     try:
-        sql_query = """
-        INSERT INTO tasks (user_id, title, description, deadline, priority)
-        VALUES (%s, %s, %s, %s, %s) RETURNING id;"""
-        cursor.execute(sql_query, (
-            task.user_id,
-            task.title,
-            task.description,
-            transformed_deadline,
-            task.priority
-        ))
-        id_tuple = cursor.fetchone()
-        return id_tuple[0]
+        with Session(autoflush=False, bind=engine) as db:
+            t = Task(
+                user_id=task.user_id,
+                title=task.title,
+                description=task.description,
+                deadline=transformed_deadline,
+                priority=task.priority
+            )
+            db.add(t)
+            db.commit()
+            return t.id
     except Exception as e:
         print(f"Ошибка во сохранения задачи в бд: {e}")
         return None
 
 
 def get_task_by_id(task_id, user_id):
-    sql_query = """SELECT id, title, description, deadline, priority, is_done
-        FROM tasks WHERE id = %s AND deleted_at IS NULL and user_id = %s;"""
-
-    cursor.execute(sql_query, (task_id, user_id))
-    task_tuple = cursor.fetchone()
-
-    if task_tuple is None:
+    with Session(autoflush=False, bind=engine) as db:
+        task = db.query(Task).filter(Task.id == task_id, Task.user_id == user_id, Task.deleted_at == None).first()
+        
+    if task is None:
         return None
     else:
-        t = Task()
-        t.task_id = task_tuple[0]
-        t.title = task_tuple[1]
-        t.description = task_tuple[2]
-        t.deadline = task_tuple[3]
-        t.priority = task_tuple[4]
-        t.is_done = task_tuple[5]
-        return t
-
+        return task
+    
 
 def get_all_tasks(user_id):
-    sql_query = """SELECT id, title, description, deadline, priority, is_done
-        FROM tasks WHERE deleted_at IS NULL AND user_id = %s ORDER BY id;"""
-
-    cursor.execute(sql_query, (user_id,))
-
-    tasks_tuple = cursor.fetchall()
-    # (
-    #   (1, "Task1", "Desc1", "10-10-2025", "низкий", True ),
-    #   (2, "Task2", "Desc2", "11-10-2025", "низкий",  False )
-    # )
-
-    tasks = list()
-    for task_tuple in tasks_tuple:
-        t = Task()
-        t.task_id = task_tuple[0]
-        t.title = task_tuple[1]
-        t.description = task_tuple[2]
-        t.deadline = task_tuple[3]
-        t.priority = task_tuple[4]
-        t.is_done = task_tuple[5]
-        tasks.append(t)
-
-    return tasks
+    with Session(autoflush=False, bind=engine) as db:
+        tasks = db.query(Task).filter(Task.user_id == user_id, Task.deleted_at == None).all()
+        return tasks
 
 
 def edit_task(task, user_id):
@@ -119,122 +80,81 @@ def edit_task(task, user_id):
     except ValueError:
         print("Ошибка: неверный формат даты!")
 
-    sql_query = """UPDATE tasks
-        SET title       = %s,
-            description = %s,
-            deadline    = %s,
-            priority    = %s
-        WHERE id = %s 
-        AND user_id = %s;"""
 
-    cursor.execute(sql_query, (
-        task.title,
-        task.description,
-        transformed_deadline,
-        task.priority,
-        task.task_id,
-        user_id)
-         )
+    with Session(autoflush=False, bind=engine) as db:
+        task_db = db.query(Task).filter(Task.id == task.id, Task.user_id == user_id).first()
 
-    # try:
-    #     conn = self.connect()
-    #     if conn is None:
-    #         return
-    #     cursor = conn.cursor()
-    #     query = "SELECT * FROM tasks WHERE task_id = %s;"
-    #     cursor.execute(query, (task_id,))
-    #     result = cursor.fetchone()
-    #     if result is None:
-    #         print(f"Задача с ID {task_id} не найдена")
-    #     else:
-    #         task = Task(result[0])
-    #         task.title = result[1]
-    #         task.description = result[2]
-    #         task.deadline = result[3]
-    #         task.priority = result[4]
-    #         task.is_done = result[5]
-    #         cursor.close()
-    #         conn.close()
-    #         return task
-    # except psycopg2.Error as e:
-    #     print(f"Ошибка при получении задачи: {e}")
-    # finally:
-    #     if conn:
-    #         conn.close()
-
+        if task_db is not None:
+            task_db.title = task.title
+            task_db.description = task.description
+            task_db.deadline = transformed_deadline
+            task_db.priority = task.priority
+            db.commit()
+            print("Task edit successfully")
+        else:
+            return None
+        
 
 def soft_delete_task(task_id, user_id):
-    sql_query = """UPDATE tasks
-        SET deleted_at = CURRENT_TIMESTAMP
-        WHERE id = %s AND user_id = %s;"""
-
-    cursor.execute(sql_query, (task_id, user_id))
+    with Session(autoflush=False, bind=engine) as db:
+        task = db.query(Task).filter(Task.id == task_id, Task.user_id == user_id).first()
+        if task is not None:
+            task.deleted_at = datetime.datetime.now()
+            db.commit()
+        else:
+            print("Задача не найдена")
 
 
 def hard_delete_task(task_id, user_id):
-    sql_query = """DELETE FROM tasks WHERE id = %s AND user_id = %s;"""
-
-    cursor.execute(sql_query, (task_id,))
+    with Session(autoflush=False, bind=engine) as db:
+        task = db.query(Task).filter(Task.id == task_id, Task.user_id == user_id).first()
+        if task is not None:
+            db.delete(task)
+            db.commit()
+        else:
+            print("Task is not found!!!")
 
 
 def change_task_status(task_id, status, user_id):
-    sql_query = """UPDATE tasks SET is_done = %s WHERE id = %s AND user_id = %s;"""
-
-    cursor.execute(sql_query, (status, task_id, user_id))
+    with Session(autoflush=False, bind=engine) as db:
+        task = db.query(Task).filter(Task.id == task_id, Task.user_id == user_id).first()
+        task.is_done = status
+        db.commit()
 
 
 def get_user_by_username_and_password(username, password):
-    sql_query = """SELECT id, full_name FROM users WHERE username = %s AND password = %s;"""
-    cursor.execute(sql_query, (username, password))
-
-    return cursor.fetchone()
+    with Session(autoflush=False, bind=engine) as db:
+        user = db.query(User).filter(User.username == username, User.password == password).first()
+        return user
 
 
 def get_user_by_username(username):
-    sql_query = """SELECT id, full_name FROM users WHERE username = %s;"""
-    cursor.execute(sql_query, (username,))
-
-    return cursor.fetchone()
+    with Session(autoflush=False, bind=engine) as db:
+        user = db.query(User).filter(User.username == username).first()
+        return user
 
 
 def add_user(username, full_name, password):
     try:
-        sql_query = """
-        INSERT INTO users (username, full_name, password) 
-        VALUES (%s, %s, %s) RETURNING id;"""
-        cursor.execute(sql_query, (username, full_name, password))
-
-        id_tuple = cursor.fetchone()
-        return id_tuple[0]
+        with Session(autoflush=False, bind=engine) as db:
+            user = User(username = username, full_name = full_name, password = password )
+            db.add(user)
+            db.commit()
+            
+            return user.id
     except Exception as e:
         print("Ошибка при добавлении нового пользователя в бд:", e)
         return None
 
 
 def get_deleted_tasks(user_id):
-    sql_query = """SELECT id, title, description, deadline, priority, is_done
-        FROM tasks WHERE deleted_at IS NOT NULL AND user_id = %s ORDER BY id;"""
+    with Session(autoflush=False, bind=engine) as db:
+        tasks = db.query(Task).filter(Task.user_id == user_id, Task.deleted_at != None).all()
 
-    cursor.execute(sql_query, (user_id,))
+        if len(tasks)  == 0:
 
-    tasks_tuple = cursor.fetchall()
-
-    if len(tasks_tuple)  == 0:
+            print("У юзера нет удаленных задач")
         
-        print("Удаленных задач нет")
+            return None
         
-        return None
-    else:
-        
-        tasks = list()
-        for task_tuple in tasks_tuple:
-            t = Task()
-            t.task_id = task_tuple[0]
-            t.title = task_tuple[1]
-            t.description = task_tuple[2]
-            t.deadline = task_tuple[3]
-            t.priority = task_tuple[4]
-            t.is_done = task_tuple[5]
-            tasks.append(t)
-
         return tasks

@@ -39,9 +39,13 @@ class ConsoleApplication:
     def print_tasks(self):
         user_id = self.authorized_user_id
         tasks = get_all_tasks(user_id)
+        if len(tasks) == 0:
+            print("У вас нет задач!")
+            return
+        
         print("--------------Список ваших задач:--------------")
         for task in tasks:
-            print(f"{task.task_id}. {task.title}")
+            print(f"{task.id}. {task.title}")
         print("-----------------------------------------------")
 
     def edit_task(self):
@@ -122,7 +126,7 @@ class ConsoleApplication:
             return
         print("--------------Список удаленных задач:--------------")
         for task in tasks:
-            print(f"{task.task_id}. {task.title} : {task.description}")
+            print(f"{task.id}. {task.title} : {task.description}")
         print("-----------------------------------------------")
 
 
@@ -172,7 +176,7 @@ class ConsoleApplication:
             print("Неправильный логин или пароль!")
             return
         else:
-            user_id, full_name = user
+            user_id, full_name = user.id, user.full_name
             self.authorized_user_id = user_id
             print(f"С возвращением {full_name}")
             self.main_menu()
